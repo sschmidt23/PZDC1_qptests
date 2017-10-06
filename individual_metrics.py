@@ -183,7 +183,9 @@ class EvaluateMetric(object):
             pits = np.array(self.PIT(using=using,dx=dx))
             self.pitarray = pits
         mask = (pits>vmin) & (pits<vmax)
-        ad_result = skgof.ad_test(pits[mask], stats.uniform())
+        print "now with proper uniform range"
+        delv = vmax-vmin
+        ad_result = skgof.ad_test(pits[mask], stats.uniform(loc=vmin,scale=delv))
         return ad_result.statistic, ad_result.pvalue
 
 class NzSumEvaluateMetric(object):
@@ -217,6 +219,21 @@ class NzSumEvaluateMetric(object):
         self.stackpz = qp.PDF(gridded=(stacked['gridded'][0],stacked['gridded'][1]))
         return
        
+    def WriteNzSumVec(self, newgrid,outfile="default_Nzoutput.dat"):
+        """
+        write the N(z) vector stored in self.stackpz, evaluated on the array
+        newgrid to output file outfile
+        Also saves the vectors in self.pzsumvec
+        Parameters:
+        -----------
+        newgrid: numpy array of values at which to evaluate stackpz
+        outfile: string, name of outpute to write data to
+        """
+        pzsumvec = self.stackpz.evaluate(newgrid,'gridded',False,False)
+        self.pzsumvec=pzsumvec
+        np.savetxt(outfile,zip(pzsumvec[0],pzsumvec[1]),fmt="%.5g %.5g")
+        return
+
 
     def NZKS(self):
         """
@@ -269,11 +286,17 @@ class NzSumEvaluateMetric(object):
       nzCvM = skgof.cvm_test(self.truth,tmpnzfunc)
       return nzCvM.statistic, nzCvM.pvalue
 
-    def NZAD(self):
+    def NZAD(self, vmin = 0.005, vmax = 1.995, delv = 0.05):
       """                                                                              
       Compute the Anderson Darling statistic and p-value for the
       two distributions of sumpz and true_z vector of spec-z's
-      Parameters:                                                                      
+      Since the Anderson Darling test requires a properly normalized
+      distribution over the [vmin,vmax] range, will need to create
+      a new qp object defined on the range np.arange(vmin,vmax+delv,delv)
+      Parameters:                                      
+      vmin, vmax: specz values outside of these values are discarded
+      delz: grid spacing for [vmin,vmax] interval to create new qp
+      object
       -----------
       using: string
       which parameterization to evaluate
@@ -284,21 +307,28 @@ class NzSumEvaluateMetric(object):
       #copy the form of Rongpu's use of skgof functions
       #will have to use QPPDFCDF class, as those expect objects
       #that have a .cdf method for a vector of values
-      tmpnzfunc = QPPDFCDF(self.stackpz)
-      nzAD = skgof.ad_test(self.truth,tmpnzfunc)
+      print "using %f and %f for vmin and vmax\n"%(vmin,vmax)
+      szs = self.truth
+      mask = (szs > vmin) & (szs < vmax)
+      vgrid = np.arange(vmin,vmax+delv,delv)
+      veval = self.stackpz.evaluate(vgrid,'gridded',True,False)
+      vobj = qp.PDF(gridded = (veval[0],veval[1]))
+      tmpnzfunc = QPPDFCDF(vobj,self.dx)
+      nzAD = skgof.ad_test(szs[mask],tmpnzfunc)
       return nzAD.statistic, nzAD.pvalue
 
 
 
 
 class QPPDFCDF(object):
-    def __init__(self,pdf_obj):
+    def __init__(self,pdf_obj,dx=0.0001):
         """an quick wrapper for a qp.PDF object that has .pdf and .cdf 
         functions for use with skgof functions
         pdf_obj: qp pdf object with using='gridded' parameterization
         """
 
         self.pdf_obj = pdf_obj
+        self.dx = dx
         return
 
     def pdf(self,grid):
@@ -309,7 +339,7 @@ class QPPDFCDF(object):
         returns:
             pdf of object evaluated at points in grid
         """
-        return self.pdf_obj.evaluate(grid,'gridded',False,False)[1]
+        return self.pdf_obj.evaluate(grid,'gridded',True,False)[1]
 
     def cdf(self,xvals):
         """
@@ -323,12 +353,12 @@ class QPPDFCDF(object):
         vals = np.array(xvals)
         if vals.size ==1:
             lims = (0.0,xvals)
-            cdfs = self.pdf_obj.integrate(lims,0.0001,'gridded',False)
+            cdfs = self.pdf_obj.integrate(lims,self.dx,'gridded',False)
         else:
             nval = len(vals)
             cdfs = np.zeros(nval)
             for i in range(nval):
                 lims = (0.0,vals[i])
-                cdfs[i] = self.pdf_obj.integrate(lims,0.0001,'gridded',False)
+                cdfs[i] = self.pdf_obj.integrate(lims,self.dx,'gridded',False)
         return cdfs
     
